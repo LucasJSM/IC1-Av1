@@ -1,105 +1,128 @@
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import matplotlib.animation as animation
-from collections import deque
+import cv2
+import numpy as np
+import math
+from collections import deque, defaultdict
 
-# Caminho da imagem cortada enviada
-map_file = "mapa.png"
+# Carregar a imagem
+img = cv2.imread(r"C:\Users\lucas\Documents\IC1\gta\mapa.png")
+if img is None:
+    print("Erro: não foi possível carregar a imagem!")
+    exit()
 
-# Mini mapa lógico (grid representando ruas simplificadas)
-# 0 = rua, 1 = obstáculo
-mapa = [
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1],
-    [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1], # Objetivo está aqui (6, 17)
-    [1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-]
+print("Imagem carregada:", img.shape)
+output = img.copy()
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-start = (17, 0)
-goal = (6, 17)
+# --- Definição das cores ---
+lower_yellow = np.array([20, 150, 150])
+upper_yellow = np.array([40, 255, 255])
 
-# Movimentos possíveis
-moves = [(-1,0), (1,0), (0,-1), (0,1)]
+lower_red1 = np.array([0, 150, 150])
+upper_red1 = np.array([10, 255, 255])
+lower_red2 = np.array([170, 150, 150])
+upper_red2 = np.array([180, 255, 255])
 
-def is_valid(mapa, visited, x, y):
-    rows, cols = len(mapa), len(mapa[0])
-    return (0 <= x < rows and 0 <= y < cols 
-            and mapa[x][y] != 1 
-            and not visited[x][y])
+lower_blue = np.array([100, 150, 150])
+upper_blue = np.array([130, 255, 255])
 
-def bfs(mapa, start, goal):
+# --- Detectar CJ (amarelo) ---
+mask_cj = cv2.inRange(hsv, lower_yellow, upper_yellow)
+contours, _ = cv2.findContours(mask_cj, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+cjs = []
+for cnt in contours:
+    (x, y), r = cv2.minEnclosingCircle(cnt)
+    if r > 3:
+        cjs.append((int(x), int(y)))
+if not cjs:
+    print("CJ não detectado!")
+    exit()
+
+# Forçar CJ como o mais à esquerda
+cj = min(cjs, key=lambda p: p[0])
+print("CJ detectado em:", cj)
+
+# --- Detectar Grove Street (vermelho) ---
+mask_red = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
+contours, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+groves = []
+for cnt in contours:
+    (x, y), r = cv2.minEnclosingCircle(cnt)
+    if r > 3:
+        groves.append((int(x), int(y)))
+if not groves:
+    print("Destino Grove não detectado!")
+    exit()
+
+grove = groves[0]
+print("Grove Street detectado em:", grove)
+
+# --- Detectar ruas (azul) ---
+mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+contours, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+ruas = []
+for cnt in contours:
+    (x, y), r = cv2.minEnclosingCircle(cnt)
+    if r > 3:
+        ruas.append((int(x), int(y)))
+print("Total de ruas detectadas:", len(ruas))
+
+# --- Montar grafo ---
+grafo = defaultdict(list)
+limite = 73  # distância máxima para conectar pontos
+todos_pontos = ruas + [cj, grove]
+
+for i, p1 in enumerate(todos_pontos):
+    for j, p2 in enumerate(todos_pontos):
+        if i != j and math.dist(p1, p2) < limite:
+            grafo[p1].append(p2)
+
+# --- BFS ---
+def bfs(start, goal, grafo):
     queue = deque([(start, [start])])
-    visited = [[False]*len(mapa[0]) for _ in range(len(mapa))]
-    visited[start[0]][start[1]] = True
-
+    visitados = set([start])
     while queue:
-        (x, y), path = queue.popleft()
-        if (x, y) == goal:
-            return path
-        for dx, dy in moves:
-            nx, ny = x + dx, y + dy
-            if is_valid(mapa, visited, nx, ny):
-                visited[nx][ny] = True
-                queue.append(((nx, ny), path + [(nx, ny)]))
+        atual, caminho = queue.popleft()
+        if atual == goal:
+            return caminho
+        for vizinho in grafo[atual]:
+            if vizinho not in visitados:
+                visitados.add(vizinho)
+                queue.append((vizinho, caminho + [vizinho]))
     return None
 
-# Encontra o caminho
-path = bfs(mapa, start, goal)
+caminho = bfs(cj, grove, grafo)
+print("Caminho encontrado:", caminho)
 
-# Carregar imagem do mapa real
-map_img = mpimg.imread(map_file)
+# --- Desenhar base do mapa ---
+frame_base = output.copy()
+for p in ruas:
+    cv2.circle(frame_base, p, 5, (255,0,0), -1)   # ruas azuis
+cv2.circle(frame_base, grove, 8, (0,0,255), -1)   # vermelho Grove
+for p1, vizinhos in grafo.items():
+    for p2 in vizinhos:
+        cv2.line(frame_base, p1, p2, (200,200,200), 1)  # conexões
 
-# Escalas para ajustar coordenadas da grade ao mapa real
-scale_x = map_img.shape[1] // len(mapa[0])  # largura / colunas
-scale_y = map_img.shape[0] // len(mapa)     # altura / linhas
+# --- Animação do CJ percorrendo caminho ---
+if caminho:
+    while True:
+        for i, pos in enumerate(caminho):
+            temp = frame_base.copy()
 
-# Criar figura
-fig, ax = plt.subplots()
-ax.imshow(map_img)
+            # Desenhar trajeto já percorrido
+            for j in range(i):
+                cv2.line(temp, caminho[j], caminho[j+1], (255,0,255), 3)
 
-def update(frame):
-    ax.clear()
-    ax.imshow(map_img)
+            # Posição atual do CJ
+            cv2.circle(temp, pos, 10, (0,255,255), -1)
 
-    # Desenha caminho percorrido até agora
-    if frame > 0:
-        trajeto = path[:frame]
-        xs = [y*scale_x + scale_x/2 for (_, y) in trajeto] # Adicionado offset para centralizar
-        ys = [x*scale_y + scale_y/2 for (x, _) in trajeto] # Adicionado offset para centralizar
-        ax.plot(xs, ys, color="blue", marker="o")
+            cv2.imshow("CJ animado no mapa", temp)
 
-    # Posição atual do CJ
-    if path and frame < len(path):
-        x, y = path[frame]
-        ax.plot(y*scale_x + scale_x/2, x*scale_y + scale_y/2, "ro", markersize=8, label="CJ 🚴") # Adicionado offset para centralizar
+            key = cv2.waitKey(500) & 0xFF
 
-    # Destino (ponto vermelho da direita)
-    gx, gy = goal
-    ax.plot(gy*scale_x + scale_x/2, gx*scale_y + scale_y/2, "gs", markersize=8, label="Grove 🏠") # Adicionado offset para centralizar
+            if cv2.getWindowProperty("CJ animado no mapa", cv2.WND_PROP_VISIBLE) < 1:
+                break
+        else:
+            continue  
+        break        
 
-    ax.legend()
-
-if path:
-    ani = animation.FuncAnimation(fig, update, frames=len(path), interval=800, repeat=False)
-    ani.save('gta_bfs_path.gif', writer='pillow')
-else:
-    print("Não foi possível encontrar um caminho.")
-
-ani = animation.FuncAnimation(fig, update, frames=len(path), interval=800, repeat=False)
-plt.show()
+cv2.destroyAllWindows()
